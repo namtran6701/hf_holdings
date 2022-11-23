@@ -1,0 +1,630 @@
+---
+title: "Risk and Return of Hawk Fund Porfolio (2020 - 2021)"
+author: "Nam Tran"
+format: docx
+editor: visual
+---
+
+## The Hawk Fund Holdings Analysis
+
+*Install some packages to support the work*
+
+```{r}
+options(warn=-1)
+options(scipen = 999)
+# Install packages to support the work
+pacman::p_load(quantmod, tidyverse, skimr, xts, magrittr, corrplot, PerformanceAnalytics, PortfolioAnalytics, ROI, ROI.plugin.glpk, ROI.plugin.quadprog, randomForest, lubridate)
+```
+
+*Create an environment to contain all stocks and ETFs of the portfolio*
+
+```{r}
+portfolio <- new.env() 
+```
+
+*Getting daily data of stocks in the portfolio and store them in the new local environment*
+
+```{r}
+getSymbols(
+  c('AXP',
+    'CAT',
+    'SCHH',
+    'COST',
+    'EL',
+    'PAVE',
+    'HD',
+    'INTC',
+    'SUSA',
+    'JPM',
+    'LMT',
+    'MCO',
+    'SPBO',
+    'SPY',
+    'TGT',
+    'XLU',
+    'VZ'
+  ),
+  from = as.Date('2020-01-01'),
+  to = as.Date(Sys.Date()),
+  periodicity = 'daily',
+  env = portfolio
+)
+
+```
+
+*Extracting the adjusted prices only and store all adj prices into 1 data frame*
+
+```{r}
+adj_portf <- do.call(merge, eapply(portfolio, Ad))
+```
+
+*Calculate the daily log return of each stock*
+
+```{r}
+log_ret <- diff(log(adj_portf), lag = 1)
+
+# remove the first NA row
+
+log_ret %<>% na.omit()
+
+```
+
+*Calculate the mean annual log return of each stock*
+
+```{r}
+
+# Calculate mean daily log ret first
+
+mean_log_ret <- sapply(log_ret, FUN = mean)
+
+# then calculate mean annual log ret
+
+(annual_mean_ret <- exp(mean_log_ret*250) - 1)
+
+ret_table <- annual_mean_ret %>%
+  enframe()
+
+ret_table %<>% 
+  transmute(name, ret = value)
+
+stock_ret <- do.call(merge, eapply(portfolio, Ad))
+
+# Calculate normal return 
+stock_ret <- 
+  ROC(stock_ret, n = 1) %>%
+  na.omit()
+
+```
+
+*Calculate the risk/standard deviation of each stock*
+
+```{r}
+risk <- sapply(log_ret, FUN = sd)
+
+annual_risk <- risk*sqrt(250)
+
+risk_table <- annual_risk %>% 
+  enframe()
+
+
+risk_table %<>% 
+  transmute(name, risk = value)
+
+
+```
+
+[**Plotting**]{.underline}
+
+```{r}
+hist(log_ret$SPY.Adjusted, breaks = 40)
+```
+
+```{r}
+# Create a dataframe to store risk and return 
+
+df <- inner_join(risk_table, ret_table, by = 'name')
+
+# Remove adjusted
+dt <- df %>%
+  separate(name, c('Stock','Removed')) %>% 
+  select(-Removed)
+# Plot the portfolio management 
+dt %>% 
+ggplot(aes(x = risk, y = ret)) + 
+  geom_point() + 
+  geom_text(aes(label = dt$Stock), vjust = 1.5, size = 2.5) +
+  ggtitle(label = 'Risks and Returns of The Hawk Fund Holdings from 2020 to Nov 2022') +
+  labs(caption = 'Data Source: Yahoo Finance') + 
+  theme_classic()
+```
+
+[**Portfolio Optimization**]{.underline}
+
+1.  Set objective for the portfolio.
+
+```{r}
+
+port <- portfolio.spec(colnames(stock_ret))
+
+# Portfolio is fully invested. 
+port <- add.constraint(port, type = 'weight_sum', min_sum = 1, max_sum = 1)
+
+# Box constraint for each individual asset. This refers to the objective of our fund.
+port <- add.constraint(port, type = 'box', min = 0.02, max = 0.08)
+
+# objective 1: maximize return 
+port <-  add.objective(port, type = 'return', name = 'mean')
+
+# objective 2: minimize risk 
+port <- add.objective(port, type = 'risk', name = 'StdDev') 
+```
+
+2.  Run the optimization
+
+```{r}
+optimized_port <- optimize.portfolio(stock_ret,
+                   port,
+                   optimize_method = 'ROI', 
+                   trace = T)
+
+```
+
+[**Visualize Result**]{.underline}
+
+```{r}
+chart.Weights(optimized_port)
+
+infor <- extractEfficientFrontier(optimized_port, 
+                         match.col = 'StdDev',
+                         n.portfolios = 25,
+                         risk_aversion = NULL
+                         )
+
+chart.EfficientFrontier(infor,
+  match.col = "StdDev", n.portfolios = 25, xlim = NULL, ylim = NULL,
+  cex.axis = 0.8, element.color = "darkgray", main = "Efficient Frontier",
+  RAR.text = "SR", rf = 0, tangent.line = TRUE, cex.legend = 0.8,
+  chart.assets = TRUE, labels.assets = TRUE, pch.assets = 21,
+  cex.assets = 0.8)
+```
+
+[**Efficient frontier 2**]{.underline}
+
+Use monthly data to see a broader picture
+
+```{r}
+
+portfolio2 <- new.env()
+
+getSymbols(
+  c('AXP',
+    'CAT',
+    'SCHH',
+    'COST',
+    'EL',
+    'PAVE',
+    'HD',
+    'INTC',
+    'SUSA',
+    'JPM',
+    'LMT',
+    'MCO',
+    'SPBO',
+    'SPY',
+    'TGT',
+    'XLU',
+    'VZ'
+  ),
+  from = as.Date('2020-01-01'),
+  to = as.Date(Sys.Date()),
+  periodicity = 'monthly',
+  env = portfolio2
+)
+
+# Extracting adj_price first
+
+stock_price <- do.call(merge, eapply(portfolio2, Ad))
+
+# calculate monthly return
+
+stock_ret <- ROC(stock_price) %>% 
+  na.omit()
+```
+
+Install some necessary packages
+
+```{r}
+pacman::p_load(fPortfolio, 
+               timeSeries)
+```
+
+```{r}
+
+return.matrix <- as.timeSeries(stock_ret)
+
+# Current US 5 year Treasury Yield is 4%, use this as daily rf
+efficient.frontier <- portfolioFrontier(
+  return.matrix, 
+  `setRiskFreeRate<-`(portfolioSpec(), 0.04/12),
+  constraints = 'LongOnly')
+
+```
+
+Plot the the efficient frontier
+
+```{r}
+plot(efficient.frontier, 
+     c(1:4)
+     )
+```
+
+Monte Carlo: All Possible combinations of the portfolio
+
+```{r}
+plot(efficient.frontier, c(1,3,7))
+```
+
+Now Play with real data: starting from Jan 3 2022.
+
+We are examining the beta and the how the portfolio risks and returns behave in this year
+
+```{r}
+# Use this package to get risk free rate, lubridate for working with time series data
+pacman::p_load(fredr,caret, loon)
+
+fredr_set_key('b93c212f1b7be7323672b926c240aebb')
+
+# Extract date and value of EFFr
+effr <- fredr(
+  series_id = 'EFFR',
+  observation_start = as.Date('2022-01-03'),
+  observation_end = as.Date('2022-10-31')
+) %>%
+  select(date, value)
+
+# the rate is annual rate, we have to deannualize it 
+
+effr %<>% 
+  mutate(value = value/252)
+
+```
+
+Load the data in
+
+```{r}
+data <- read.csv('hawk_ret2.csv', stringsAsFactors = T) %>% 
+  as_tibble()
+
+# format the date
+
+data %<>% 
+  mutate( date = mdy(Date)) %>% 
+  select(-Date)
+
+```
+
+Join the new data with the effr
+
+```{r}
+
+sample <- inner_join(data, effr, by = 'date')
+
+# Create market premium and excess return 
+sample %<>% 
+  transmute(date = date,
+            effr = value,
+            excess_ret = Portofolio_Ret - value,
+            mket_prem = Benchmark - value)
+
+```
+
+```{r}
+
+ggplot(sample) +
+ aes(x = mket_prem, y = excess_ret) +
+ geom_point(shape = "circle", size = 1.5, colour = "#112446") +
+ labs(x = "Market Premium", y = "Excess Return", title = "Relationship between The Hawk Fund and Market Return YTD") +
+  theme(panel.background = element_blank())
+
+sample %>% 
+  gather(key = 'Variable',
+         value = 'Return',
+         -c(date, effr)) %>% 
+  mutate(Variable = fct_recode(Variable,
+    'S&P500_EX_RET' = 'mket_prem',
+    'PORT_EX_RET' = 'excess_ret'
+  )) %>% 
+  ggplot(aes(x = Return, fill = Variable)) +
+  geom_density() +
+  facet_wrap(~Variable, scales = 'fixed') +
+  theme(panel.background = element_blank())
+
+# with(l_scale3D(sample),
+#      l_plot3D(excess_ret, mket_prem, effr))
+
+```
+
+Run the regression to find Beta
+
+```{r}
+fit <- lm(data = sample, 
+          excess_ret ~ mket_prem)
+
+
+fit %>% summary()
+```
+
+```{r}
+
+# set.seed(12)
+
+trainCtrl <- trainControl(method = 'cv', number = 4)
+
+# There is a report that there are some missing values that keep the model from running. examine which one
+subset(sample, is.na(sample$effr))
+
+(fit_ml <- train(excess_ret ~ mket_prem,
+      data = sample, 
+      method = 'lm',
+      trControl = trainCtrl,
+      tuneGrid = NULL,
+      na.action = 'na.omit'))
+
+
+```
+
+```{r}
+pacman::p_load(lgarch, gets)
+```
+
+```{r}
+
+set.seed(123)
+y <- arima.sim(list(ar = 0.4), 100)
+mod01 <- arx(y, ar = 1)
+mX <- matrix(rnorm(100*5), 100, 5)
+mod02 <- arx(y, mc = T, ar = 1:2, mxreg = mX)
+mod03 <- arx(y, mc = T, ar = 1:2, mxreg = mX, arch = 1:3, asym = 1,
+vxreg = log(mX^2), vcov.type = 'white')
+
+
+```
+
+```{r}
+# apply on arx object 
+
+getsm02 <- getsm(mod02)
+
+getsm02b <- getsm(mod02, t.pval = 0.01, wald.pval = 0.01 )
+
+getsm02c <- getsm(mod02, keep=1)
+
+
+```
+
+```{r}
+
+data(Nile)
+
+is <- isat(Nile, ar = 1:2, sis = T, iis = F, t.pval = 0.01)
+```
+
+```{r}
+# sample %<>% 
+#   filter(complete.cases(.))
+# 
+# zoo.sample <- zoo(sample)
+# 
+# matrix_sample <- as.matrix(zoo.sample)
+# 
+# isat(as.numeric(zoo.sample[,3]), ar = 1:2, sis = T, iis = F, t.pval = 0.01)
+```
+
+Next, we examine how close is our stock's return to one another in this year.
+
+```{r}
+
+port2 <- new.env()
+
+getSymbols(
+  c('AXP',
+    'CAT',
+    'SCHH',
+    'COST',
+    'EL',
+    'PAVE',
+    'HD',
+    'INTC',
+    'SUSA',
+    'JPM',
+    'LMT',
+    'MCO',
+    'SPBO',
+    'SPY',
+    'TGT',
+    'XLU',
+    'VZ'
+  ),
+  from = as.Date('2022-01-01'),
+  to = as.Date('2022-11-01'),
+  periodicity = 'monthly',
+  env = port2
+)
+```
+
+Next, extract adjusted prices of stocks and put them in a table
+
+```{r}
+port_df <- do.call(merge, eapply(port2, Ad))
+
+```
+
+Given monthly price, get monthly return
+
+```{r}
+port_df <- ROC(port_df, n = 1) %>% 
+  na.omit()
+
+# Create month name vector
+month_name <- c(
+                'Feb',
+                'Mar',
+                'Apr',
+                'May',
+                'Jun',
+                'Jul',
+                'Aug',
+                'Sep',
+                'Oct'
+                )
+
+# Turn the data to data frame
+
+port_df <- data.frame(port_df)
+
+# Remove the "Adjusted" in the name
+
+colnames(port_df) <- gsub('.Adjusted','',colnames(port_df))
+
+# Convert rownames to col
+port_df <- rownames_to_column(port_df, 'Month')
+
+port_df %<>% 
+  mutate(Month = month_name) 
+
+```
+
+```{r}
+# 
+# library(DataExplorer)
+# 
+# port_df %>% 
+#   select(-Month) %>% 
+#   create_report(
+#     output_file = 'inidividual_stock',
+#     report_title = 'Individual Monthly Returns Analysis 2022 '
+#   )
+```
+
+[**Hierachical clustering**]{.underline}
+
+Install some packages for running the model
+
+```{r}
+pacman::p_load(cluster, factoextra, dendextend)
+```
+
+```{r}
+
+# Create a train model for hierachical clustering 
+
+train <- port_df %>% 
+  gather(key = 'Stock',
+         value = 'Monthly_Return',
+         -Month) %>% 
+  spread(key = 'Month', 
+         value = 'Monthly_Return')
+
+```
+
+Find the distance between stocks
+
+```{r}
+
+# Create a rownames from stock column
+train <- column_to_rownames(train, var = 'Stock')
+
+#Calculate the distance between stock
+d <- stats::dist(train, method = 'euclidean')
+
+set.seed(1)
+
+# Run the hierachical model 
+fit_hcl <- hclust(d, method = 'average')
+
+plot(fit_hcl, cex = 0.6, hang = -1, ann = F)
+```
+
+We can also compute the hierachical clustering with the agnes function to see the model's coefficient. Values closer to 1 suggest strong clustering structure.
+
+```{r}
+# Create a data frame for the to store result 
+method <- c('average', 'single', 'complete', 'ward')
+output_hcl <- data.frame(Method = method,
+                         Coefficient = rep(NA, 4))
+
+for (i in method){
+  fit_hcl_agnes <- agnes(train, method = i)
+  output_hcl[which(method == i),2] <- fit_hcl_agnes$ac
+}
+  
+```
+
+After examine multiple models, we can see that the complete method has the highest coefficient, which indicates that it is the best method for the model. Let's adopt this method to build the hierachical clustering
+
+```{r}
+set.seed(1)
+
+fit_hcl_best <- hclust(d, method = 'complete')
+
+plot(fit_hcl_best, cex = 0.6, hang = -1, ann =F)
+```
+
+[**Work with dendrograms**]{.underline}
+
+Cut the tree into 3 groups
+
+```{r}
+sub_grp <- cutree(fit_hcl_best, k = 3) 
+
+sub_grp <- table(sub_grp)
+```
+
+Draw the dendrogram with 3 clusters
+
+```{r}
+plot(fit_hcl_best, cex = .7)
+
+rect.hclust(fit_hcl_best,k = 3, border = 2:4)
+```
+
+We can also use the fviz_cluster function from the factoextra package to visualize the result in a scatter plot
+
+```{r}
+set.seed(1)
+hc.cut <- hcut(train, k = 3, hc_method = 'complete')
+
+fviz_dend(hc.cut, show_labels = T, rect = T)
+
+fviz_cluster(hc.cut, ellipse.type = 'convex') + 
+  theme(panel.background = element_blank()) +
+   ylim(c(-2,3.2))
+```
+
+Exploring further why they are added grouped to the model
+
+```{r}
+
+sample <- train
+
+# store obs with the group it belongs to 
+
+sample %<>% 
+  select(Feb,
+         Mar,
+         Apr,
+         May,
+         Jun,
+         Jul,
+         Aug,
+         Sep,
+         Oct)
+
+memb <- cutree(fit_hcl_best, k = 3)
+
+
+# set labels as cluster membership and utility name
+row.names(sample) <- paste(memb, ": ", row.names(sample), sep = "")
+
+heatmap(as.matrix(sample), Colv = NA, hclustfun = hclust, col=rev(paste("gray",1:99,sep="")))
+```
